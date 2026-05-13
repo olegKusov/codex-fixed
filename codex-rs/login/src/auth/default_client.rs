@@ -36,6 +36,8 @@ pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(||
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
+#[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+const DEFAULT_TCP_USER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 pub use codex_config::ResidencyRequirement;
 
@@ -199,18 +201,25 @@ pub fn create_client() -> CodexHttpClient {
 /// This starts from the standard Codex user agent, default headers, and sandbox-specific proxy
 /// policy, then layers in shared custom CA handling from `CODEX_CA_CERTIFICATE` /
 /// `SSL_CERT_FILE`. The function remains infallible for compatibility with existing call sites, so
-/// a custom-CA or builder failure is logged and falls back to `reqwest::Client::new()`.
+/// a custom-CA or builder failure is logged and falls back to a plain reqwest client.
 pub fn build_reqwest_client() -> reqwest::Client {
     try_build_reqwest_client().unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build default reqwest client");
-        with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder())
-            .build()
+        with_chatgpt_cloudflare_cookie_store(reqwest_client_builder()).build()
             .unwrap_or_else(|fallback_error| {
                 tracing::warn!(
                     error = %fallback_error,
                     "failed to build fallback reqwest client with ChatGPT Cloudflare cookie store"
                 );
-                reqwest::Client::new()
+                reqwest_client_builder()
+                    .build()
+                    .unwrap_or_else(|raw_fallback_error| {
+                        tracing::warn!(
+                            error = %raw_fallback_error,
+                            "failed to build fallback reqwest client"
+                        );
+                        reqwest::Client::new()
+                    })
             })
     })
 }
@@ -220,13 +229,29 @@ pub fn build_reqwest_client() -> reqwest::Client {
 /// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use
 /// this method directly.
 pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
-    let mut builder = reqwest::Client::builder().default_headers(default_headers());
+    let mut builder = reqwest_client_builder().default_headers(default_headers());
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
     builder = with_chatgpt_cloudflare_cookie_store(builder);
 
     build_reqwest_client_with_custom_ca(builder)
+}
+
+fn reqwest_client_builder() -> reqwest::ClientBuilder {
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    {
+        // reqwest's Linux-family default is 30s, which is too short for long unary requests.
+        reqwest::Client::builder().tcp_user_timeout(DEFAULT_TCP_USER_TIMEOUT)
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "linux"
+    )))]
+    {
+        reqwest::Client::builder()
+    }
 }
 
 pub fn default_headers() -> HeaderMap {

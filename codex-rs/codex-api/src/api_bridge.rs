@@ -123,7 +123,9 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 status: http::StatusCode::INTERNAL_SERVER_ERROR,
                 request_id: None,
             }),
-            TransportError::Timeout => CodexErr::Timeout,
+            TransportError::Timeout(message) => {
+                CodexErr::Stream(format!("request timed out: {message}"), None)
+            }
             TransportError::Network(msg) | TransportError::Build(msg) => {
                 CodexErr::Stream(msg, None)
             }

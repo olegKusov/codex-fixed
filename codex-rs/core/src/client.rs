@@ -831,7 +831,9 @@ impl ModelClient {
         .await
         {
             Ok(result) => result,
-            Err(_) => Err(ApiError::Transport(TransportError::Timeout)),
+            Err(_) => Err(ApiError::Transport(TransportError::Timeout(
+                "websocket connect timed out".to_string(),
+            ))),
         };
         let error_message = result.as_ref().err().map(telemetry_api_error_message);
         let response_debug = result
@@ -1157,7 +1159,7 @@ impl ModelClientSession {
             {
                 Ok(new_conn) => new_conn,
                 Err(err) => {
-                    if matches!(err, ApiError::Transport(TransportError::Timeout)) {
+                    if matches!(err, ApiError::Transport(TransportError::Timeout(_))) {
                         self.reset_websocket_session();
                     }
                     return Err(err);

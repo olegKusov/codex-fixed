@@ -11,6 +11,7 @@ use futures::stream::BoxStream;
 use http::HeaderMap;
 use http::Method;
 use http::StatusCode;
+use std::error::Error;
 use tracing::Level;
 use tracing::enabled;
 use tracing::trace;
@@ -70,12 +71,24 @@ impl ReqwestTransport {
     }
 
     fn map_error(err: reqwest::Error) -> TransportError {
+        let message = error_with_sources(&err);
         if err.is_timeout() {
-            TransportError::Timeout
+            TransportError::Timeout(message)
         } else {
-            TransportError::Network(err.to_string())
+            TransportError::Network(message)
         }
     }
+}
+
+fn error_with_sources(error: &(dyn Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(error) = source {
+        message.push_str("; caused by: ");
+        message.push_str(&error.to_string());
+        source = error.source();
+    }
+    message
 }
 
 fn request_body_for_trace(req: &Request) -> String {
@@ -152,5 +165,52 @@ impl HttpTransport for ReqwestTransport {
             headers,
             bytes: Box::pin(stream),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_with_sources;
+    use pretty_assertions::assert_eq;
+    use std::error::Error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct TestError {
+        message: &'static str,
+        source: Option<Box<dyn Error + Send + Sync>>,
+    }
+
+    impl fmt::Display for TestError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl Error for TestError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.source
+                .as_ref()
+                .map(|source| source.as_ref() as &(dyn Error + 'static))
+        }
+    }
+
+    #[test]
+    fn error_with_sources_includes_source_chain() {
+        let error = TestError {
+            message: "error sending request",
+            source: Some(Box::new(TestError {
+                message: "connection failed",
+                source: Some(Box::new(TestError {
+                    message: "operation timed out",
+                    source: None,
+                })),
+            })),
+        };
+
+        assert_eq!(
+            error_with_sources(&error),
+            "error sending request; caused by: connection failed; caused by: operation timed out"
+        );
     }
 }

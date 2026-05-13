@@ -64,7 +64,7 @@ pub fn telemetry_transport_error_message(error: &TransportError) -> String {
     match error {
         TransportError::Http { status, .. } => format!("http {}", status.as_u16()),
         TransportError::RetryLimit => "retry limit reached".to_string(),
-        TransportError::Timeout => "timeout".to_string(),
+        TransportError::Timeout(err) => err.to_string(),
         TransportError::Network(err) => err.to_string(),
         TransportError::Build(err) => err.to_string(),
     }
@@ -149,10 +149,17 @@ mod tests {
 
     #[test]
     fn telemetry_error_messages_preserve_non_http_details() {
+        let timeout = TransportError::Timeout(
+            "error sending request; caused by: operation timed out".to_string(),
+        );
         let network = TransportError::Network("dns lookup failed".to_string());
         let build = TransportError::Build("invalid header value".to_string());
         let stream = ApiError::Stream("socket closed".to_string());
 
+        assert_eq!(
+            telemetry_transport_error_message(&timeout),
+            "error sending request; caused by: operation timed out"
+        );
         assert_eq!(
             telemetry_transport_error_message(&network),
             "dns lookup failed"

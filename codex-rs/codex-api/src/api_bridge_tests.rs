@@ -125,6 +125,22 @@ fn map_api_error_keeps_unknown_400_errors_generic() {
 }
 
 #[test]
+fn map_api_error_preserves_transport_timeout_details() {
+    let err = map_api_error(ApiError::Transport(TransportError::Timeout(
+        "error sending request; caused by: operation timed out".to_string(),
+    )));
+
+    let CodexErr::Stream(message, delay) = err else {
+        panic!("expected CodexErr::Stream, got {err:?}");
+    };
+    assert_eq!(
+        message,
+        "request timed out: error sending request; caused by: operation timed out"
+    );
+    assert_eq!(delay, None);
+}
+
+#[test]
 fn map_api_error_maps_usage_limit_limit_name_header() {
     let mut headers = HeaderMap::new();
     headers.insert(

@@ -126,13 +126,20 @@ async fn run_remote_compact_task_inner(
     }
     attempt.track(sess.as_ref(), status, error.clone()).await;
     if let Err(err) = result {
-        let event = EventMsg::Error(
-            err.to_error_event(Some("Error running remote compact task".to_string())),
-        );
+        let event = remote_compact_error_event(&err);
         sess.send_event(turn_context, event).await;
         return Err(err);
     }
     Ok(())
+}
+
+fn remote_compact_error_event(err: &CodexErr) -> EventMsg {
+    let mut event = err.to_error_event(Some("Error running remote compact task".to_string()));
+    // The legacy compact endpoint is unary, so CodexErr::Stream's default wording is misleading.
+    if let CodexErr::Stream(message, _) = err {
+        event.message = format!("Error running remote compact task: request failed: {message}");
+    }
+    EventMsg::Error(event)
 }
 
 async fn run_remote_compact_task_inner_impl(
@@ -384,4 +391,26 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     }
 
     deleted_items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn remote_compact_error_event_uses_unary_request_wording_for_stream_error() {
+        let event = remote_compact_error_event(&CodexErr::Stream(
+            "error sending request; caused by: operation timed out".to_string(),
+            /*delay*/ None,
+        ));
+
+        let EventMsg::Error(event) = event else {
+            panic!("expected error event");
+        };
+        assert_eq!(
+            event.message,
+            "Error running remote compact task: request failed: error sending request; caused by: operation timed out"
+        );
+    }
 }
